@@ -13,7 +13,7 @@ Este documento resume el estado actual del proyecto: qué componentes se están 
 | Microcontrolador | Arduino Nano |
 | Driver de motores | TB6612FNG, módulo HW-166 |
 | Motores | 2 motorreductores de 5V |
-| Sensores de línea | Arreglo de 8 sensores infrarrojos (2 quedaron dañados, ver sección 4) |
+| Sensores de línea | Arreglo de 8 sensores infrarrojos |
 | Alimentación de los motores (VM) | Batería de 3.7V conectada directo al driver |
 | Alimentación de la lógica del driver (VCC) | 5V tomados del propio Arduino Nano |
 | Alimentación de pruebas iniciales | USB del PC (antes de tener batería) |
@@ -29,8 +29,8 @@ Este mapeo no se ha vuelto a tocar desde que se detectaron los sensores dañados
 | Función | Pin Arduino Nano |
 | --- | --- |
 | IR (emisor infrarrojo) | D5 |
-| Sensor 1 | A0 (dañado, siempre da 1) |
-| Sensor 2 | A1 (dañado, siempre da 1) |
+| Sensor 1 | A0 |
+| Sensor 2 | A1 |
 | Sensor 3 | A2 |
 | Sensor 4 | A3 (sensor de línea media) |
 | Sensor 5 | A4 (sensor de línea media) |
