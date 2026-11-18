@@ -1,0 +1,22 @@
+//Sensores de la linea media son A3 y A4
+const int IR = 5;
+const int sensores[8] = {
+  A0, A1, A2, A3, A4, A5, 4, 3
+};
+void setup() {
+  Serial.begin(9600);
+  pinMode(IR, OUTPUT);
+  // Encender los infrarrojos
+  digitalWrite(IR, HIGH);
+  for (int i = 0; i < 8; i++) {
+    pinMode(sensores[i], INPUT);
+  }
+}
+void loop() {
+  for (int i = 0; i < 8; i++) {
+    Serial.print(digitalRead(sensores[i]));
+    Serial.print(" ");
+  }
+  Serial.println();
+  delay(100);
+}

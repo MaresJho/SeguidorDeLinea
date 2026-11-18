@@ -1,0 +1,165 @@
+/* ===================================================================
+   SEGUIDOR DE LÍNEA - PD con posición ponderada (8 sensores)
+   - Orden físico (izquierda -> derecha): D3, D4, A5, A4, A3, A2, A1, A0
+   - Canal A del TB6612 = motor IZQUIERDO, Canal B = motor DERECHO
+   - Línea negra = 1 en los sensores
+   - INVERTIR_GIRO: si corrige hacia el lado contrario, cámbialo
+   =================================================================== */
+
+const bool INVERTIR_GIRO = false;
+
+// --- Driver TB6612FNG ---
+const int STBY = 2;
+const int AIN1 = 7;
+const int AIN2 = 8;
+const int PWMA = 9;
+const int BIN1 = 12;
+const int BIN2 = 11;
+const int PWMB = 10;
+
+const int PIN_IR = 5;
+const int LED_STATUS = 13;
+
+// --- Sensores ---
+const int NUM_SENSORES = 8;
+const int PIN_SENSOR[NUM_SENSORES] = {A0, A1, A2, A3, A4, A5, 4, 3};
+const float POS_SENSOR[NUM_SENSORES] = {3.5, 2.5, 1.5, 0.5, -0.5, -1.5, -2.5, -3.5};
+
+// --- Velocidades (todo hacia adelante, sin reversa) ---
+const float VEL_BASE = 158;   // velocidad crucero (+10%)
+const int VEL_MAX = 250;      // tope de la rueda externa
+const int BUSQ_EXT = 185;     // búsqueda: rueda externa (+10%)
+const int BUSQ_INT = 33;      // búsqueda: rueda interna (+10%)
+
+// --- Control PD ---
+float KP = 0.12;          // ganancia en errores chicos (recta)
+float KP_CURVA = 0.06;    // ganancia extra que crece con el error (curvas)
+float KD = 0.50;          // amortiguación
+const float ALFA_D = 0.5; // filtro de la derivada
+const unsigned long TS_MS = 10;
+const unsigned long TOL_PERDIDA_MS = 20; // ignora pérdidas de línea más cortas que esto
+
+float errorPrev = 0;
+float derivada = 0;
+int ultimoLado = 1;       // -1 izquierda, 1 derecha
+unsigned long tPrev = 0;
+unsigned long tPerdida = 0;
+
+void setup() {
+  pinMode(PIN_IR, OUTPUT);
+  digitalWrite(PIN_IR, HIGH);
+
+  for (int i = 0; i < NUM_SENSORES; i++) pinMode(PIN_SENSOR[i], INPUT);
+
+  pinMode(STBY, OUTPUT);
+  pinMode(AIN1, OUTPUT);
+  pinMode(AIN2, OUTPUT);
+  pinMode(PWMA, OUTPUT);
+  pinMode(BIN1, OUTPUT);
+  pinMode(BIN2, OUTPUT);
+  pinMode(PWMB, OUTPUT);
+  pinMode(LED_STATUS, OUTPUT);
+
+  digitalWrite(STBY, LOW);
+  digitalWrite(AIN1, LOW);
+  digitalWrite(AIN2, LOW);
+  digitalWrite(BIN1, LOW);
+  digitalWrite(BIN2, LOW);
+  analogWrite(PWMA, 0);
+  analogWrite(PWMB, 0);
+
+  // Espera reglamentaria de 7 segundos
+  for (int i = 0; i < 7; i++) {
+    digitalWrite(LED_STATUS, HIGH);
+    delay(500);
+    digitalWrite(LED_STATUS, LOW);
+    delay(500);
+  }
+
+  digitalWrite(LED_STATUS, HIGH);
+  digitalWrite(STBY, HIGH);
+  delay(50);
+  tPrev = millis();
+}
+
+void loop() {
+  unsigned long ahora = millis();
+  if (ahora - tPrev < TS_MS) return;
+  tPrev = ahora;
+
+  // --- Lectura ---
+  bool lec[NUM_SENSORES];
+  for (int i = 0; i < NUM_SENSORES; i++) lec[i] = (digitalRead(PIN_SENSOR[i]) == 1);
+
+  // --- Grupo de sensores consecutivos más cercano al error anterior ---
+  bool hayLinea = false;
+  float error = 0;
+  float mejorDist = 999;
+  int i = 0;
+  while (i < NUM_SENSORES) {
+    if (lec[i]) {
+      int ini = i;
+      float suma = 0;
+      while (i < NUM_SENSORES && lec[i]) {
+        suma += POS_SENSOR[i];
+        i++;
+      }
+      float centro = suma / (i - ini);
+      float dist = fabs(centro - errorPrev);
+      if (dist < mejorDist) {
+        mejorDist = dist;
+        error = centro;
+        hayLinea = true;
+      }
+    } else {
+      i++;
+    }
+  }
+
+  if (hayLinea) {
+    tPerdida = 0;
+
+    float dCruda = error - errorPrev;
+    derivada = ALFA_D * derivada + (1.0 - ALFA_D) * dCruda;
+    errorPrev = error;
+
+    // Solo recuerda el lado si el error es notable
+    if (error >= 1.0) ultimoLado = 1;
+    else if (error <= -1.0) ultimoLado = -1;
+
+    // Corrección no lineal: suave en recta, fuerte en curva
+    float correccion = VEL_BASE * (KP * error + KP_CURVA * error * fabs(error) + KD * derivada);
+    if (INVERTIR_GIRO) correccion = -correccion;
+
+    // Sin reversa: la rueda interna se queda en 0 como mínimo
+    int velA = constrain((int)(VEL_BASE + correccion), 0, VEL_MAX);
+    int velB = constrain((int)(VEL_BASE - correccion), 0, VEL_MAX);
+
+    controlMotores(velA, velB);
+  } else {
+    // Tolerancia: si la pérdida es muy corta, mantiene el último comando
+    if (tPerdida == 0) tPerdida = ahora;
+    if (ahora - tPerdida < TOL_PERDIDA_MS) return;
+
+    derivada = 0;
+    int lado = ultimoLado;
+    if (INVERTIR_GIRO) lado = -lado;
+
+    // Busca en arco hacia adelante, del lado donde vio la línea por última vez
+    if (lado < 0) controlMotores(BUSQ_INT, BUSQ_EXT);  // arco a la izquierda
+    else          controlMotores(BUSQ_EXT, BUSQ_INT);  // arco a la derecha
+  }
+}
+
+// Velocidades de 0 a 255, siempre hacia adelante
+void controlMotores(int velA, int velB) {
+  // Canal A (izquierdo)
+  digitalWrite(AIN1, HIGH);
+  digitalWrite(AIN2, LOW);
+  analogWrite(PWMA, velA);
+
+  // Canal B (derecho)
+  digitalWrite(BIN1, HIGH);
+  digitalWrite(BIN2, LOW);
+  analogWrite(PWMB, velB);
+}
